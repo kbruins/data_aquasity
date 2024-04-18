@@ -128,23 +128,22 @@ class MyDaq:
 
 class Pendulum:
     def __init__(self, mydaq: MyDaq):
+        self.mydaq: MyDaq = mydaq
+
+        self.raw_pod: float = 0.0
+        self.raw_accelerometer: pygame.Vector2 = pygame.Vector2(0.0, 0.0)
+        self.normalized_accelerometer: pygame.Vector2 = pygame.Vector2(0.0, 0.0)  # gravitational space
         self.angle_pod: float = 0.0
         self.angle_accelerometer: float = 0.0
-        self.pod: float = 0.0
-        self.accelerometer: pygame.Vector2 = pygame.Vector2(0.0, 0.0)
-        self.normalized_accelerometer: pygame.Vector2 = pygame.Vector2(0.0, 0.0)
-        self.angle: float = 0.0
-        self.mydaq: MyDaq = mydaq
+
         self.buffer: list[list[float]] = [[], [], []]
-        self.buffer_size: int = 0
-        self.calibration_points: list[float] = [0.0, 0.0]
-        self.angle_start = 0.0
-        self.angle_mul = 1.0
-        self.accelerometer_points = [[0.0, 1.0], [0.0, 1.0]]
-        self.calibrating: int | None = None
-        self.calibration_buffer: list[list[float]] = [[], [], []]
-        self.set_buffer_size(10)
+        self.sampling_buffer: list[list[float]] = [[], [], []]
         self.data_samples: dict[int, list[tuple[float, float, float]]] = {}
+        self.buffer_size: int = 0
+        self.sample_size: int = 50
+        self.sampling: int | None = None
+        self.set_buffer_size(10)
+
         self.pod_start: float = 0.0
         self.pod_slope: float = 1.0
         self.acc_x_start = 0.0
@@ -152,72 +151,51 @@ class Pendulum:
         self.acc_y_start = 0.0
         self.acc_y_slope = 1.0
 
-    def aquire(self):
+    def acquire(self):
+        """get a single sample from all sensors"""
         self.mydaq.read_data()
         if not self.mydaq.connected:
             return
 
-        if self.calibrating is not None:  # add data if calibrating
-            self.calibration_buffer[0].append(self.mydaq.data[0])
-            self.calibration_buffer[1].append(self.mydaq.data[1])
-            self.calibration_buffer[2].append(self.mydaq.data[2])
-            if len(self.calibration_buffer[0]) >= 50:
-                self.finish_calibrate()
+        if self.sampling is not None:  # add data if sampling
+            for i, data in enumerate(self.mydaq.data):
+                self.sampling_buffer[i].append(data)
+            if len(self.sampling_buffer[0]) >= self.sample_size:
+                self.finish_sampling()
 
         for i, buffer in enumerate(self.buffer):  # shift data and insert new data
             buffer[1:] = buffer[:-1]
             buffer[0] = self.mydaq.data[i]
-        self.pod = sum(self.buffer[0])/len(self.buffer[0])
-        self.accelerometer.x = sum(self.buffer[1])/len(self.buffer[1])
-        self.accelerometer.y = sum(self.buffer[2])/len(self.buffer[2])
+
+        # update the raw values by taking the average of the current buffer.
+        self.raw_pod = sum(self.buffer[0]) / len(self.buffer[0])
+        self.raw_accelerometer.x = sum(self.buffer[1]) / len(self.buffer[1])
+        self.raw_accelerometer.y = sum(self.buffer[2]) / len(self.buffer[2])
 
     def set_buffer_size(self, buffer_size: int):
+        """set the size of the buffer used for smoothing the real time values"""
         if buffer_size < 1:
             raise ValueError("buffer size cannot be less then 1")
         self.buffer_size = buffer_size
         for i in range(3):
             self.buffer[i] = [0.0]*buffer_size
-        print(self.buffer)
 
-    def calibrate(self, angle: int):
-        self.calibrating = angle
-        self.calibration_buffer[0].clear()
-        self.calibration_buffer[1].clear()
-        self.calibration_buffer[2].clear()
+    def start_sampling(self, angle: int):
+        """start sampling at the given angle"""
+        self.sampling = angle
+        self.sampling_buffer[0].clear()
+        self.sampling_buffer[1].clear()
+        self.sampling_buffer[2].clear()
 
-    def finish_calibrate(self):
-        if self.calibrating not in self.data_samples:
-            self.data_samples[self.calibrating] = []
-        for i in range(len(self.calibration_buffer[0])):
-            self.data_samples[self.calibrating].append((self.calibration_buffer[0][i], self.calibration_buffer[1][i], self.calibration_buffer[2][i]))
+    def finish_sampling(self):
+        """called when sampling is complete.
+        adds the sample buffer data to the overall data samples and updates the regression."""
+        if self.sampling not in self.data_samples:  # create a new entry if it does not exist yet
+            self.data_samples[self.sampling] = []
+        for i in range(len(self.sampling_buffer[0])):  # add new samples to the overall samples
+            self.data_samples[self.sampling].append((self.sampling_buffer[0][i], self.sampling_buffer[1][i], self.sampling_buffer[2][i]))
         self.update_regression()
-        #avarage1 = sum(self.calibration_buffer[0]) / len(self.calibration_buffer[0])
-        #avarage2 = sum(self.calibration_buffer[1]) / len(self.calibration_buffer[1])
-        #avarage3 = sum(self.calibration_buffer[2]) / len(self.calibration_buffer[2])
-        #self.calibration_buffer[0].clear()
-        #self.calibration_buffer[1].clear()
-        #self.calibration_buffer[2].clear()
-        #if self.calibrating == -90:
-        #    self.accelerometer_points[1][1] = avarage3
-        #    self.calibration_points[0] = avarage1
-        #if self.calibrating == 90:
-        #    self.accelerometer_points[1][0] = avarage3
-        #    self.calibration_points[1] = avarage1
-        #if self.calibrating == 0:
-        #    self.accelerometer_points[0][1] = avarage2
-        #if self.calibrating == 180:
-        #    self.accelerometer_points[0][0] = avarage2
-        #    self.calibrating = None
-        #    return
-
-        #self.angle_start = (self.calibration_points[0]+self.calibration_points[1])/2
-
-        #try:
-        #    self.angle_mul = 180/(self.calibration_points[1]-self.calibration_points[0])
-        #except ZeroDivisionError:
-        #    self.angle_mul = 1.0
-
-        self.calibrating = None
+        self.sampling = None
 
     def update_regression(self):
         if len(self.data_samples.keys()) < 2:
@@ -228,11 +206,12 @@ class Pendulum:
         self.acc_x_slope, self.acc_x_start, _, _, _ = scipy.stats.linregress(acc_x_array)
         self.acc_y_slope, self.acc_y_start, _, _, _ = scipy.stats.linregress(acc_y_array)
 
-        print(f"pod: angle = V*{self.pod_slope} + {self.pod_start}")
+        print(f"raw_pod: angle = V*{self.pod_slope} + {self.pod_start}")
         print(f"acc: x = V*{self.acc_x_slope} + {self.acc_x_start}")
         print(f"acc: y = V*{self.acc_y_slope} + {self.acc_y_start}")
 
     def get_sample_arrays(self) -> tuple[ndarray, ndarray, ndarray]:
+        """converts the current data samples to a set of arrays used for calculating regression."""
         pod_samples: list[tuple[float, float]] = []
         acc_x_samples: list[tuple[float, float]] = []
         acc_y_samples: list[tuple[float, float]] = []
@@ -247,22 +226,15 @@ class Pendulum:
         return np.asarray(pod_samples), np.asarray(acc_x_samples), np.asarray(acc_y_samples)
 
     def pod_angle(self):
-        self.angle_pod = self.pod*self.pod_slope + self.pod_start
+        """update the current potentiometers angle in degrees."""
+        self.angle_pod = self.raw_pod * self.pod_slope + self.pod_start
 
     def accelerometer_angle(self):
-        #x_min = self.accelerometer_points[0][0]
-        #x_max = self.accelerometer_points[0][1]
-        #y_min = self.accelerometer_points[1][0]
-        #y_max = self.accelerometer_points[1][1]
-        #normal_x = (self.accelerometer.x-x_min)/(x_max-x_min)*2-1
-        #normal_y = (self.accelerometer.y-y_min)/(y_max-y_min)*2-1
-
-        normal_x = self.accelerometer.x*self.acc_x_slope + self.acc_x_start
-        normal_y = self.accelerometer.y*self.acc_y_slope + self.acc_y_start
+        """updates the gravitaional, force and angle values of the accelerometer."""
+        normal_x = self.raw_accelerometer.x * self.acc_x_slope + self.acc_x_start
+        normal_y = self.raw_accelerometer.y * self.acc_y_slope + self.acc_y_start
         self.normalized_accelerometer.update(normal_x, normal_y)
         self.angle_accelerometer = self.normalized_accelerometer.angle_to((1, 0))
-        #if self.angle_accelerometer > 180:
-        #    self.angle_accelerometer = -360+self.angle_accelerometer
 
 
 class Renderer:
@@ -570,22 +542,26 @@ class MainMenu(Menu):
         self.pendulum = pendulum
         self.renderer = renderer
         self.sidebar = "pendulum"
-        self.get_stats_samples = False
-        self.stats_buffers: list[list] = [[], [], []]
-        self.stats_buffer_size = 50
+        self.sampling = False
+        self.sample_size = 50
+        self.sample_buffers: list[list] = [[], [], []]
 
-        self.stats_pod = 0.0
-        self.stats_acc_x = 0.0
-        self.stats_acc_y = 0.0
+        self.avg_pod = 0.0
+        self.avg_acc_x = 0.0
+        self.avg_acc_y = 0.0
         self.std_pod = 0.0
         self.std_acc_x = 0.0
         self.std_acc_y = 0.0
 
-        self.sample_count = TextBox((0.3, 0.1), comp_text_box(200), self.end_samples_input, name="samples", text="buffer: None",
-                                    press=self.start_samples_input, whitelist={"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"})
+        self.err_pod = 0.0
+        self.err_acc_x = 0.0
+        self.err_acc_y = 0.0
+        self.err_pod_angle = 0.0
+        self.err_acc_angle = 0.0
 
-        self.acquire_count = TextBox((0.7, 0.3), comp_text_box(200), self.end_stats_input, name="acquire count", text="size: None",
-                                     press=self.start_stats_input, whitelist={"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"})
+        # main objects
+        self.input_smooth_buffer = TextBox((0.3, 0.1), comp_text_box(200), self.end_buffer_input, name="samples", text="buffer: None",
+                                           press=self.start_buffer_input, whitelist={"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"})
 
         self.volt_pod = TextBox((0.3, 0.2), comp_text_box(300), None, name="pot", text="")
         self.volt_x = TextBox((0.3, 0.3), comp_text_box(300), None, name="acc_x", text="")
@@ -595,29 +571,38 @@ class MainMenu(Menu):
         self.angle_acc = TextBox((0.3, 0.6), comp_text_box(300), None, name="acc_angle", text="")
         self.force_acc = TextBox((0.3, 0.7), comp_text_box(300), None, name="acc_length", text="")
 
-        self.sample_min90 = self.basic_button((0.1, 0.2), "sample -90°", lambda angle=-90: self.start_calibrate(angle))
-        self.sample_0 = self.basic_button((0.1, 0.3), "sample 0°", lambda angle=0: self.start_calibrate(angle))
-        self.sample_90 = self.basic_button((0.1, 0.4), "sample 90°", lambda angle=90: self.start_calibrate(angle))
-        self.sample_180 = self.basic_button((0.1, 0.5), "sample 180°", lambda angle=180: self.start_calibrate(angle))
-        self.clear_calibration = self.basic_button((0.1, 0.8), "clear callibration", self.reset_calibration_data)
-        self.sample_angle = TextBox((0.1, 0.6), comp_text_box(300), None, text="0")
-        self.start_sampling = self.basic_button((0.1, 0.7), "start sampling", self.custom_sample)
+        self.sample_min90 = self.basic_button((0.1, 0.2), "sample -90°", lambda angle=-90: self.start_sampling(angle))
+        self.sample_0 = self.basic_button((0.1, 0.3), "sample 0°", lambda angle=0: self.start_sampling(angle))
+        self.sample_90 = self.basic_button((0.1, 0.4), "sample 90°", lambda angle=90: self.start_sampling(angle))
+        self.sample_180 = self.basic_button((0.1, 0.5), "sample 180°", lambda angle=180: self.start_sampling(angle))
+        self.sample_angle = TextBox((0.1, 0.6), comp_text_box(300), self.update_stats, text="0")
+        self.btn_start_sampling = self.basic_button((0.1, 0.7), "start sampling", self.custom_sample)
+        self.btn_clear_data = self.basic_button((0.1, 0.8), "clear data", self.clear_sample_data)
 
         self.show_pendulum = self.basic_button((0.5, 0.2), "pendulum", self.sidebar_pendulum)
-        self.show_graph = self.basic_button((0.7, 0.2), "graph", self.sidebar_graph)
+        self.show_graph = self.basic_button((0.7, 0.2), "graph [WIP]", self.sidebar_graph)
         self.show_statistics = self.basic_button((0.9, 0.2), "statistics", self.sidebar_stats)
 
-        self.acquire_samples = self.basic_button((0.7, 0.8), "show", self.calculate_stats, name="acquire")
-        self.text_stats_pod = TextBox((0.6, 0.4), comp_text_box(300), None, name="stats pod", text="")
-        self.text_stats_acc_x = TextBox((0.6, 0.5), comp_text_box(300), None, name="stats acc y", text="")
-        self.text_stats_acc_y = TextBox((0.6, 0.6), comp_text_box(300), None, name="stats acc x", text="")
-        self.text_std_pod = TextBox((0.8, 0.4), comp_text_box(300), None, name="std pod", text="")
-        self.text_std_acc_x = TextBox((0.8, 0.5), comp_text_box(300), None, name="std acc y", text="")
-        self.text_std_acc_y = TextBox((0.8, 0.6), comp_text_box(300), None, name="std acc x", text="")
+        # stats objects
+        self.input_sample_size = TextBox((0.7, 0.3), comp_text_box(200), self.end_stats_input, text="size: None",
+                                         press=self.start_stats_input, whitelist={"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"})
+        self.text_avg_pod = TextBox((0.6, 0.4), comp_text_box(300), None, name="stats raw_pod", text="")
+        self.text_avg_x = TextBox((0.6, 0.5), comp_text_box(300), None, name="stats acc y", text="")
+        self.text_avg_y = TextBox((0.6, 0.6), comp_text_box(300), None, name="stats acc x", text="")
+        self.text_std_pod = TextBox((0.8, 0.4), comp_text_box(300), None, name="std raw_pod", text="")
+        self.text_std_x = TextBox((0.8, 0.5), comp_text_box(300), None, name="std acc y", text="")
+        self.text_std_y = TextBox((0.8, 0.6), comp_text_box(300), None, name="std acc x", text="")
         self.file_name = TextBox((0.7, 0.7), comp_text_box(700), None, name="file name", text="file name")
-        self.save_file_button = self.basic_button((0.55, 0.8), "save to file", self.save_file, name="save")
-        self.print_console_button = self.basic_button((0.85, 0.8), "print to console", self.print_stats, name="print")
+        self.btn_save_file = self.basic_button((0.55, 0.8), "save to file", self.save_file, name="save")
+        self.btn_load_file = self.basic_button((0.7, 0.8), "load file", self.load_file, name="acquire")
+        self.btn_print_console = self.basic_button((0.85, 0.8), "print to console", self.print_stats, name="print")
 
+        self.sub_menu_sprites = [self.text_avg_pod, self.text_avg_x, self.text_avg_y,
+                                 self.text_std_pod, self.text_std_x, self.text_std_y]
+        self.sub_menu_buttons = [self.file_name, self.btn_save_file, self.btn_load_file, self.btn_print_console,
+                                 self.input_sample_size]
+
+        # pendulum model
         self.pendulum_model = Object3D([], [], [])
 
         verts = 32
@@ -649,89 +634,11 @@ class MainMenu(Menu):
         self.pendulum_model.index_faces()
         self.pendulum_model.update_positions()
 
-    def custom_sample(self):
-        self.remove_outline()
-        try:
-            angle: int = int(self.sample_angle.text)
-        except ValueError:
-            print(f"{self.sample_angle.text} is not a valid value")
-            self.sample_angle.text = "not an int"
-            return
-        if angle < -180 or angle > 180:
-            print(f"{angle} is outside range -180 to 180")
-            self.sample_angle.text = "outside range"
-            return
-
-        self.pendulum.calibrate(angle)
-
-    def reset_calibration_data(self):
-        self.remove_outline()
-        self.pendulum.data_samples.clear()
-
-    def sidebar_pendulum(self):
-        self.gui.remove_objects(sprites=(self.gui.get_sprite({"selected", "stats pod", "stats acc x", "stats acc y", "std pod", "std acc x", "std acc y"})),
-                                buttons=(self.gui.get_button({"acquire", "acquire count", "file name", "save", "print"})))
-        self.sidebar = "pendulum"
-        self.gui.get_sprite("outline")[0].name = "selected"
-
-    def sidebar_graph(self):
-        self.gui.remove_objects(sprites=(self.gui.get_sprite({"selected", "stats pod", "stats acc x", "stats acc y", "std pod", "std acc x", "std acc y"})),
-                                buttons=(self.gui.get_button({"acquire", "acquire count", "file name", "save", "print"})))
-        self.sidebar = ""
-        self.gui.get_sprite("outline")[0].name = "selected"
-
-    def sidebar_stats(self):
-        self.gui.remove_objects(sprites=(self.gui.get_sprite("selected")))
-        self.sidebar = "stats"
-        self.gui.get_sprite("outline")[0].name = "selected"
-
-        self.acquire_count.text = f"size: {self.stats_buffer_size}"
-        self.gui.add_objects(sprites=(self.text_stats_pod, self.text_stats_acc_x, self.text_stats_acc_y,
-                                      self.text_std_pod, self.text_std_acc_x, self.text_std_acc_y),
-                             buttons=(self.acquire_samples, self.acquire_count, self.file_name,
-                                      self.save_file_button, self.print_console_button))
-
-    def get_samples(self):
-        self.remove_outline()
-        if self.get_stats_samples:
-            self.get_stats_samples = False
-            self.acquire_samples.image = center_text("acquire", get_img("button", TEXTURES), BUTTON_FONT, DARK_BLUE)
-            self.calculate_stats()
-            return
-
-        self.get_stats_samples = True
-        self.stats_buffers = [[], [], []]
-        self.acquire_samples.image = center_text("cancel sampling", get_img("button", TEXTURES), BUTTON_FONT, DARK_BLUE)
-
-    def start_calibrate(self, angle: int):
-        self.pendulum.calibrate(angle)
-        self.remove_outline()
-
-    def start_samples_input(self):
-        self.sample_count.text = str(self.pendulum.buffer_size)
-
-    def end_samples_input(self):
-        if self.sample_count.text:
-            self.pendulum.set_buffer_size(int(clamp(int(self.sample_count.text), 1, 50)))
-        else:
-            self.pendulum.set_buffer_size(10)
-        self.sample_count.text = f"buffer: {self.pendulum.buffer_size}"
-
-    def start_stats_input(self):
-        self.acquire_count.text = str(self.stats_buffer_size)
-
-    def end_stats_input(self):
-        if self.acquire_count.text:
-            self.stats_buffer_size = int(clamp(int(self.acquire_count.text), 30, 1000))
-        else:
-            self.stats_buffer_size = 50
-        self.acquire_count.text = f"size: {self.stats_buffer_size}"
-
     def show(self):
         """shows the menu screen"""
         self.gui.name = "Main"
 
-        self.sample_count.text = f"buffer: {self.pendulum.buffer_size}"
+        self.input_smooth_buffer.text = f"buffer: {self.pendulum.buffer_size}"
 
         self.center_background()
         self.gui.clear()
@@ -739,9 +646,9 @@ class MainMenu(Menu):
         self.baked_menu()
         self.gui.add_objects(sprites=(self.volt_pod, self.volt_x, self.volt_y,
                                       self.angle_pod, self.angle_acc, self.force_acc),
-                             buttons=(self.sample_count, self.sample_0, self.sample_90,
+                             buttons=(self.input_smooth_buffer, self.sample_0, self.sample_90,
                                       self.sample_180, self.sample_min90, self.show_pendulum, self.show_graph, self.show_statistics,
-                                      self.sample_angle, self.start_sampling, self.clear_calibration))
+                                      self.sample_angle, self.btn_start_sampling, self.btn_clear_data))
 
         original_focus = self.gui.focus
         try:
@@ -765,6 +672,30 @@ class MainMenu(Menu):
             self.gui.filled_surface()
         pygame.display.flip()
 
+    def sidebar_pendulum(self):
+        self.gui.remove_objects(sprites=self.sub_menu_sprites, buttons=self.sub_menu_buttons)
+        self.gui.remove_objects(sprites=(self.gui.get_sprite("selected")))
+        self.sidebar = "pendulum"
+        self.gui.get_sprite("outline")[0].name = "selected"
+
+    def sidebar_graph(self):
+        self.gui.remove_objects(sprites=self.sub_menu_sprites, buttons=self.sub_menu_buttons)
+        self.gui.remove_objects(sprites=(self.gui.get_sprite("selected")))
+        self.sidebar = ""
+        self.gui.get_sprite("outline")[0].name = "selected"
+
+    def sidebar_stats(self):
+        self.gui.remove_objects(sprites=self.sub_menu_sprites, buttons=self.sub_menu_buttons)
+        self.gui.remove_objects(sprites=(self.gui.get_sprite("selected")))
+        self.sidebar = "stats"
+        self.gui.get_sprite("outline")[0].name = "selected"
+
+        self.input_sample_size.text = f"size: {self.sample_size}"
+        self.gui.add_objects(sprites=(self.text_avg_pod, self.text_avg_x, self.text_avg_y,
+                                      self.text_std_pod, self.text_std_x, self.text_std_y),
+                             buttons=(self.btn_load_file, self.input_sample_size, self.file_name,
+                                      self.btn_save_file, self.btn_print_console))
+
     def draw_pendulum(self):
         self.gui.filled_surface()
 
@@ -779,23 +710,43 @@ class MainMenu(Menu):
         draw(self.pendulum_model, (0, 0.2, 1.5), (0, 0, self.pendulum.angle_pod+180), model_color, 0.7, self.gui, position)
 
     def draw_stats(self):
-        if self.get_stats_samples:
-            self.stats_buffers[0].append(self.pendulum.pod)
-            self.stats_buffers[1].append(self.pendulum.accelerometer.x)
-            self.stats_buffers[2].append(self.pendulum.accelerometer.y)
-            if len(self.stats_buffers[0]) >= self.stats_buffer_size:
-                self.get_stats_samples = False
-                self.acquire_samples.image = center_text("acquire", get_img("button", TEXTURES), BUTTON_FONT, DARK_BLUE)
-                self.calculate_stats()
-        self.text_stats_pod.text = f"pod: {self.stats_pod:.4f}"
-        self.text_stats_acc_x.text = f"x: {self.stats_acc_x:.4f}"
-        self.text_stats_acc_y.text = f"y: {self.stats_acc_y:.4f}"
-        self.text_std_pod.text = f"pod std: {self.std_pod:.4f}"
-        self.text_std_acc_x.text = f"x std: {self.std_acc_x:.4f}"
-        self.text_std_acc_y.text = f"y std: {self.std_acc_y:.4f}"
+        if self.sampling:
+            self.sample_buffers[0].append(self.pendulum.raw_pod)
+            self.sample_buffers[1].append(self.pendulum.raw_accelerometer.x)
+            self.sample_buffers[2].append(self.pendulum.raw_accelerometer.y)
+            if len(self.sample_buffers[0]) >= self.sample_size:
+                self.remove_outline()
+                self.sampling = False
+                self.btn_load_file.image = center_text("acquire", get_img("button", TEXTURES), BUTTON_FONT, DARK_BLUE)
+                if (angle := self.get_sample_angle()) is not None:
+                    self.calculate_stats(angle)
+        self.text_avg_pod.text = f"raw_pod: {self.avg_pod:.4f}"
+        self.text_avg_x.text = f"x: {self.avg_acc_x:.4f}"
+        self.text_avg_y.text = f"y: {self.avg_acc_y:.4f}"
+        self.text_std_pod.text = f"raw_pod std: {self.std_pod:.4f}"
+        self.text_std_x.text = f"x std: {self.std_acc_x:.4f}"
+        self.text_std_y.text = f"y std: {self.std_acc_y:.4f}"
         self.gui.filled_surface()
 
-    def calculate_stats(self):
+    def clear_sample_data(self):
+        self.remove_outline()
+        self.pendulum.data_samples.clear()
+
+    def get_sample_angle(self) -> int | None:
+        try:
+            angle: int = int(self.sample_angle.text)
+        except ValueError:
+            print(f"{self.sample_angle.text} is not a valid value")
+            self.sample_angle.text = "not an int"
+            return None
+        if angle < -180 or angle > 180:
+            print(f"{angle} is outside range -180 to 180")
+            self.sample_angle.text = "outside range"
+            return None
+
+        return angle
+
+    def custom_sample(self):
         self.remove_outline()
         try:
             angle: int = int(self.sample_angle.text)
@@ -808,24 +759,54 @@ class MainMenu(Menu):
             self.sample_angle.text = "outside range"
             return
 
+        self.pendulum.start_sampling(angle)
+
+    def start_sampling(self, angle: int):
+        self.pendulum.start_sampling(angle)
+        self.remove_outline()
+
+    def start_buffer_input(self):
+        self.input_smooth_buffer.text = str(self.pendulum.buffer_size)
+
+    def end_buffer_input(self):
+        if self.input_smooth_buffer.text:
+            self.pendulum.set_buffer_size(int(clamp(int(self.input_smooth_buffer.text), 1, 50)))
+        else:
+            self.pendulum.set_buffer_size(10)
+        self.input_smooth_buffer.text = f"buffer: {self.pendulum.buffer_size}"
+
+    def start_stats_input(self):
+        self.input_sample_size.text = str(self.sample_size)
+
+    def end_stats_input(self):
+        if self.input_sample_size.text:
+            self.sample_size = int(clamp(int(self.input_sample_size.text), 30, 1000))
+        else:
+            self.sample_size = 50
+        self.input_sample_size.text = f"size: {self.sample_size}"
+
+    def update_stats(self):
+        if (angle := self.get_sample_angle()) is not None:
+            self.calculate_stats(angle)
+        self.text_avg_pod.text = f"raw_pod: {self.avg_pod:.4f}"
+        self.text_avg_x.text = f"x: {self.avg_acc_x:.4f}"
+        self.text_avg_y.text = f"y: {self.avg_acc_y:.4f}"
+        self.text_std_pod.text = f"raw_pod std: {self.std_pod:.4f}"
+        self.text_std_x.text = f"x std: {self.std_acc_x:.4f}"
+        self.text_std_y.text = f"y std: {self.std_acc_y:.4f}"
+        self.gui.filled_surface()
+
+    def calculate_stats(self, angle: int) -> bool:
+        if angle not in self.pendulum.data_samples:
+            print(f"angle {angle} has not been sampled yet")
+            return False
         stats_average = [0.0, 0.0, 0.0]
         stats_std = [0.0, 0.0, 0.0]
         data_points = [[], [], []]
-        try:
-            for buffer in self.pendulum.data_samples[angle]:
-                data_points[0].append(buffer[0])
-                data_points[1].append(buffer[1])
-                data_points[2].append(buffer[2])
-        except KeyError:
-            print(f"angle {angle} has not been sampled yet")
-            self.text_stats_pod.text = "pod: NAN"
-            self.text_stats_acc_x.text = "x: NAN"
-            self.text_stats_acc_y.text = "y: NAN"
-            self.text_std_pod.text = "pod std: NAN"
-            self.text_std_acc_x.text = "x std: NAN"
-            self.text_std_acc_y.text = "y std: NAN"
-            self.gui.filled_surface()
-            return
+        for buffer in self.pendulum.data_samples[angle]:
+            data_points[0].append(buffer[0])
+            data_points[1].append(buffer[1])
+            data_points[2].append(buffer[2])
 
         for i, buffer in enumerate(data_points):
 
@@ -837,60 +818,134 @@ class MainMenu(Menu):
             stats_average[i] = average
             stats_std[i] = std
 
-        self.stats_pod, self.stats_acc_x, self.stats_acc_y = stats_average
+        # error potentiometer
+        min_pod = min(data_points[0])
+        max_pod = max(data_points[0])
+        self.err_pod = (max_pod - min_pod) / 2
+        self.err_pod_angle = self.err_pod * self.pendulum.pod_slope
+
+        # error accelerometer.
+        min_x, min_y = min(data_points[1]), min(data_points[2])
+        max_x, max_y = max(data_points[1]), max(data_points[2])
+        average_x, average_y = stats_average[1:3]
+        average_division = average_x / average_y
+        self.err_acc_x, self.err_acc_y = (max_x - min_x) / 2, (max_y - min_y) / 2
+        err_x, err_y = self.err_acc_x * self.pendulum.acc_x_slope, self.err_acc_y * self.pendulum.acc_y_slope
+        delta_div = abs(average_division) * sqrt((err_x / average_x)**2 + (err_y / average_y)**2)
+        self.err_acc_angle = (1/(1+math.degrees(math.tan(average_division))**2)) * delta_div
+
+        self.avg_pod, self.avg_acc_x, self.avg_acc_y = stats_average
         self.std_pod, self.std_acc_x, self.std_acc_y = stats_std
-        self.text_stats_pod.text = f"pod: {self.stats_pod:.4f}"
-        self.text_stats_acc_x.text = f"x: {self.stats_acc_x:.4f}"
-        self.text_stats_acc_y.text = f"y: {self.stats_acc_y:.4f}"
-        self.text_std_pod.text = f"pod std: {self.std_pod:.4f}"
-        self.text_std_acc_x.text = f"x std: {self.std_acc_x:.4f}"
-        self.text_std_acc_y.text = f"y std: {self.std_acc_y:.4f}"
-        self.gui.filled_surface()
+
+        return True
 
     def spreadsheet_string(self) -> str:
-        result_string = "pod  \tx    \ty\n"
-        #for i in range(len(self.stats_buffers[0])):
-        #    pod_value, x_value, y_value = self.stats_buffers[0][i], self.stats_buffers[1][i], self.stats_buffers[2][i]
-        #    result_string += str(round(pod_value, 4)).ljust(6, "0")+"\t" + str(round(x_value, 4)).ljust(6, "0")+"\t" + str(round(y_value, 4)).ljust(6, "0")+"\t\n"
+        result_string = "data points\t\t\t\t\tstats\tvolt pod\t\t\tvolt acc x\t\t\t volt acc y\t\t\terror pod\terror acc\n"
+        result_string += "angle\tpod\tacc_x\tacc_y\t\tangle\taverage\tstd\terror\taverage\tstd\terror\taverage\tstd\terror\tdegrees\tdegrees\n"
+        sampled_angles = list(self.pendulum.data_samples.keys())
+        value_buffer = self.avg_pod, self.std_pod, self.err_pod, self.avg_acc_x, self.std_acc_x, self.err_acc_x, self.avg_acc_y, self.std_acc_y, self.err_acc_y, self.err_pod_angle, self.err_acc_angle
+        sampled_angles.sort()
+        data_entries = []
+        stat_entries = []
+        for angle in sampled_angles:
+            self.calculate_stats(angle)
+            stat_entry = f"{angle}\t{self.avg_pod:.8}\t{self.std_pod:.8}\t{self.err_pod:.8}"
+            stat_entry += f"\t{self.avg_acc_x:.8}\t{self.std_acc_x:.8}\t{self.err_acc_x:.8}"
+            stat_entry += f"\t{self.avg_acc_y:.8}\t{self.std_acc_y:.8}\t{self.err_acc_y:.8}"
+            stat_entry += f"\t{self.err_pod_angle:.8}\t{self.err_acc_angle:.8}"
+            stat_entries.append(stat_entry)
+            for entry in self.pendulum.data_samples[angle]:
+                data_entries.append(f"{angle}\t{entry[0]:.8}\t{entry[1]:.8}\t{entry[2]:.8}")
 
-        result_string += str(self.pendulum.data_samples)
-        result_string += "avarage:\t\t\n"
-        result_string += str(round(self.stats_pod, 4)).ljust(6, "0")+"\t" + str(round(self.stats_acc_x, 4)).ljust(6, "0")+"\t" + str(round(self.stats_acc_y, 4)).ljust(6, "0")+"\t\n"
-        result_string += "std:\t\t\n"
-        result_string += str(round(self.std_pod, 4)).ljust(6, "0")+"\t" + str(round(self.std_acc_x, 4)).ljust(6, "0")+"\t" + str(round(self.std_acc_y, 4)).ljust(6, "0")+"\t\n"
+        self.avg_pod, self.std_pod, self.err_pod, self.avg_acc_x, self.std_acc_x, self.err_acc_x, self.avg_acc_y, self.std_acc_y, self.err_acc_y, self.err_pod_angle, self.err_acc_angle = value_buffer
+
+        for i, second_part in enumerate(stat_entries):
+            data_entries[i] = data_entries[i] + "\t\t" + second_part
+
+        result_string += "\n".join(data_entries)
         return result_string
 
     def print_stats(self):
         self.remove_outline()
-        print(self.spreadsheet_string())
+        if (angle := self.get_sample_angle()) is None:
+            return
+        if not self.calculate_stats(angle):
+            print("specified angle is not yet sampled")
+            return
+
+        print(f"\nshowing stats for angle: {angle}")
+        print("\navarages (Volt):")
+        print(f"\t-potentiometer: {self.avg_pod:.4f}")
+        print(f"\t-accelerometer x: {self.avg_acc_x:.4f}")
+        print(f"\t-accelerometer y: {self.avg_acc_y:.4f}")
+        print("\nstandard deviation (Volt):")
+        print(f"\t-potentiometer: {self.std_pod:.4f}")
+        print(f"\t-accelerometer x: {self.std_acc_x:.4f}")
+        print(f"\t-accelerometer y: {self.std_acc_y:.4f}")
+        print("\nerror (Volt):")
+        print(f"\t-potentiometer: {self.err_pod:.4f}")
+        print(f"\t-accelerometer x: {self.err_acc_x:.4f}")
+        print(f"\t-accelerometer y: {self.err_acc_y:.4f}")
+        print("\nerror (angle):")
+        print(f"\t-potentiometer: {self.err_pod_angle:.4f}")
+        print(f"\t-accelerometer: {self.err_acc_angle:.4f}")
 
     def save_file(self):
         self.remove_outline()
-        if not self.stats_buffers[0]:
+        if not self.pendulum.data_samples:
             print("no data")
             return
         if self.file_name.text == "file name" or not self.file_name.text:
             print("provide a file name")
             return
+        print("saving...")
         with open("data\\" + self.file_name.text, "w") as f:
             f.write(self.spreadsheet_string())
         print(f"saved file as {self.file_name.text}")
 
+    def load_file(self):
+        try:
+            with open("data\\" + self.file_name.text, "r") as f:
+                file_contents = f.read()
+        except IOError:
+            print("could not open or read the given file")
+            self.remove_outline()
+            return
+        file_lines = file_contents.split("\n")
+        if len(file_lines) < 3:
+            print("could not load file")
+            self.remove_outline()
+            return
+        for line in file_lines[2:]:
+            try:
+                angle, pod, x, y = line.split("\t")[:4]
+            except IndexError:
+                continue
+            try:
+                angle_int = int(angle)
+                if angle_int not in self.pendulum.data_samples:
+                    self.pendulum.data_samples[angle_int] = []
+                self.pendulum.data_samples[angle_int].append((float(pod), float(x), float(y)))
+            except ValueError:
+                continue
+        self.remove_outline()
+        print("file loaded")
+
     def update_text(self):
         if self.pendulum.mydaq.connected:
-            self.volt_pod.text = "pod: " + f"{self.pendulum.pod:.4f}"
-            self.volt_x.text = "x: " + f"{self.pendulum.accelerometer.x:.4f}"
-            self.volt_y.text = "y: " + f"{self.pendulum.accelerometer.y:.4f}"
+            self.volt_pod.text = "raw_pod: " + f"{self.pendulum.raw_pod:.4f}"
+            self.volt_x.text = "x: " + f"{self.pendulum.raw_accelerometer.x:.4f}"
+            self.volt_y.text = "y: " + f"{self.pendulum.raw_accelerometer.y:.4f}"
             self.pendulum.pod_angle()
             self.pendulum.accelerometer_angle()
-            self.angle_pod.text = "angle pod: " + f"{self.pendulum.angle_pod:.4f}"
+            self.angle_pod.text = "angle raw_pod: " + f"{self.pendulum.angle_pod:.4f}"
             self.angle_acc.text = "angle acc: " + f"{self.pendulum.angle_accelerometer:.4f}"
             self.force_acc.text = "force acc: " + f"{self.pendulum.normalized_accelerometer.length():.4f}"
         else:
-            self.volt_pod.text = "pod: disconnected"
+            self.volt_pod.text = "raw_pod: disconnected"
             self.volt_x.text = "x: disconnected"
             self.volt_y.text = "y: disconnected"
-            self.angle_pod.text = "angle pod: disconnected"
+            self.angle_pod.text = "angle raw_pod: disconnected"
             self.angle_acc.text = "angle acc: disconnected"
             self.force_acc.text = "force acc: disconnected"
 
@@ -914,12 +969,6 @@ def main():
         background_sprite.viewport_to_pixels((0.5, 0.5), window.get_size())
         gui.add_objects(sprites=(background_sprite, ))
         gui.bake_background()
-
-    def basic_button(pos: tuple[int, int], text: str, action, surface: pygame.Surface | None = None,
-                     color=DARK_BLUE, font=BUTTON_FONT, priority=15, name="Button"):
-        if surface is None:
-            surface = get_img("button", TEXTURES)
-        return Button(pos, center_text(text, surface, font, color), action, priority, name, wip, show_outline, remove_outline)
 
     def key_press(event: pygame.event.Event):
         nonlocal fullscreen, window, small_window_size
@@ -973,47 +1022,6 @@ def main():
         mydaq.close_taks()
         run = False
 
-    def show_outline():
-        active = gui.get_focus()
-        rect = active.get_global_rect()
-        rect.inflate_ip(8, 8)
-        surface = colored_rect(WHITE, rect.size, True).convert_alpha()
-
-        # put the corner in the left corner and then size/rotate 2 lines to get a quarter image
-        outline_part = get_img("outline_corner", TEXTURES)
-        surface.blit(outline_part, (0, 0))
-        surface.blit(pygame.transform.flip(outline_part, True, False), (rect.w-16, 0))
-        outline_part = get_img("outline_line", TEXTURES)
-        surface.blit(pygame.transform.scale(outline_part, (rect.w-32, 4)), (16, 0))
-        surface.blit(pygame.transform.scale(pygame.transform.rotate(outline_part, 90), (4, rect.h-32)), (0, 16))
-
-        surface.blit(pygame.transform.flip(surface, True, True), (0, 0))
-        sprite = GUISprite(rect.topleft, surface, 26, "outline")
-        gui.add_objects(sprites=(sprite, ))
-        # draw_screen()
-
-    def remove_outline():
-        gui.remove_objects(sprites=(gui.get_sprite({"outline"})))
-        # draw_screen()
-
-    def draw_menu(last_menu=None):
-        x, y = pygame.display.get_window_size()
-        gui.add_objects(buttons=(Button((x - 45, 5), get_img("button_close3", TEXTURES), close,
-                                        press=show_outline, unfocused=remove_outline),
-                                 Button((x - 100, 5), get_img("wing_base_small", TEXTURES), pygame.display.iconify)))
-        if last_menu is not None:
-            gui.add_objects(buttons=(basic_button((x+5, 5), "back", last_menu), ))
-        draw_screen()
-
-    def baked_menu(last_menu=None):
-        x, y = pygame.display.get_window_size()
-        gui.add_objects(buttons=(Button((x - 45, 5), get_img("button_close3", TEXTURES), close,
-                                        press=show_outline, unfocused=remove_outline),
-                                 Button((x - 100, 5), get_img("wing_base_small", TEXTURES), pygame.display.iconify)))
-        if last_menu is not None:
-            gui.add_objects(buttons=(basic_button((5, 5), "back", last_menu), ))
-        gui.bake_background()
-
     def main_loop():
         while run:
             clock.tick(FPS_TARGET)
@@ -1043,12 +1051,6 @@ def main():
 
     mydaq.init_task()
 
-    sprite_dict: dict[str: GUISprite | Button | TextBox | GUI] = {}
-
-    def basic_button(pos: tuple[int, int], text: str, action, surface=get_img("button", TEXTURES),
-                     color=DARK_BLUE, font=BUTTON_FONT, priority=15, name="Button"):
-        return Button(pos, center_text(text, surface, font, color), action, priority, name, wip, show_outline, remove_outline)
-
     event_functions = {pygame.NOEVENT: wip,
                        pygame.KEYDOWN: key_press, pygame.KEYUP: key_release,
                        pygame.MOUSEBUTTONDOWN: mouse_press, pygame.MOUSEBUTTONUP: mouse_release,
@@ -1056,7 +1058,7 @@ def main():
                        pygame.WINDOWFOCUSGAINED: wip, pygame.WINDOWRESIZED: window_changed_size,
                        pygame.WINDOWMOVED: window_changed_size,
                        pygame.QUIT: close, UPDATE_SCREEN: draw_screen,
-                       events.DRAW_SCREEN: draw_screen, SAMPLE_DATA: lambda _event=None: pendulum.aquire()}
+                       events.DRAW_SCREEN: draw_screen, SAMPLE_DATA: lambda _event=None: pendulum.acquire()}
 
     events.event_functions.update(event_functions)
     pygame.event.clear()
