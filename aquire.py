@@ -720,12 +720,12 @@ class MainMenu(Menu):
                 self.btn_load_file.image = center_text("acquire", get_img("button", TEXTURES), BUTTON_FONT, DARK_BLUE)
                 if (angle := self.get_sample_angle()) is not None:
                     self.calculate_stats(angle)
-        self.text_avg_pod.text = f"raw_pod: {self.avg_pod:.4f}"
-        self.text_avg_x.text = f"x: {self.avg_acc_x:.4f}"
-        self.text_avg_y.text = f"y: {self.avg_acc_y:.4f}"
-        self.text_std_pod.text = f"raw_pod std: {self.std_pod:.4f}"
-        self.text_std_x.text = f"x std: {self.std_acc_x:.4f}"
-        self.text_std_y.text = f"y std: {self.std_acc_y:.4f}"
+        self.text_avg_pod.text = f"avg pod: {self.avg_pod:.4f}"
+        self.text_avg_x.text = f"avg x: {self.avg_acc_x:.4f}"
+        self.text_avg_y.text = f"avg y: {self.avg_acc_y:.4f}"
+        self.text_std_pod.text = f"std pod: {self.std_pod:.4f}"
+        self.text_std_x.text = f"std x: {self.std_acc_x:.4f}"
+        self.text_std_y.text = f"std y: {self.std_acc_y:.4f}"
         self.gui.filled_surface()
 
     def clear_sample_data(self):
@@ -822,16 +822,18 @@ class MainMenu(Menu):
         min_pod = min(data_points[0])
         max_pod = max(data_points[0])
         self.err_pod = (max_pod - min_pod) / 2
-        self.err_pod_angle = self.err_pod * self.pendulum.pod_slope
+        self.err_pod_angle = self.err_pod * abs(self.pendulum.pod_slope)
 
         # error accelerometer.
         min_x, min_y = min(data_points[1]), min(data_points[2])
         max_x, max_y = max(data_points[1]), max(data_points[2])
         average_x, average_y = stats_average[1:3]
-        average_division = average_x / average_y
         self.err_acc_x, self.err_acc_y = (max_x - min_x) / 2, (max_y - min_y) / 2
-        err_x, err_y = self.err_acc_x * self.pendulum.acc_x_slope, self.err_acc_y * self.pendulum.acc_y_slope
-        delta_div = abs(average_division) * sqrt((err_x / average_x)**2 + (err_y / average_y)**2)
+        err_x, err_y = self.err_acc_x * abs(self.pendulum.acc_x_slope), self.err_acc_y * abs(self.pendulum.acc_y_slope)
+        corrected_x = average_x * self.pendulum.acc_x_slope + self.pendulum.acc_x_start
+        corrected_y = average_y * self.pendulum.acc_y_slope + self.pendulum.acc_y_start
+        average_division = corrected_x / corrected_y
+        delta_div = abs(average_division) * sqrt((err_x / corrected_x)**2 + (err_y / corrected_y)**2)
         self.err_acc_angle = (1/(1+math.degrees(math.tan(average_division))**2)) * delta_div
 
         self.avg_pod, self.avg_acc_x, self.avg_acc_y = stats_average
@@ -928,24 +930,25 @@ class MainMenu(Menu):
                 self.pendulum.data_samples[angle_int].append((float(pod), float(x), float(y)))
             except ValueError:
                 continue
+        self.pendulum.update_regression()
         self.remove_outline()
         print("file loaded")
 
     def update_text(self):
         if self.pendulum.mydaq.connected:
-            self.volt_pod.text = "raw_pod: " + f"{self.pendulum.raw_pod:.4f}"
-            self.volt_x.text = "x: " + f"{self.pendulum.raw_accelerometer.x:.4f}"
-            self.volt_y.text = "y: " + f"{self.pendulum.raw_accelerometer.y:.4f}"
+            self.volt_pod.text = "volt pod: " + f"{self.pendulum.raw_pod:.4f}"
+            self.volt_x.text = "volt x: " + f"{self.pendulum.raw_accelerometer.x:.4f}"
+            self.volt_y.text = "volt y: " + f"{self.pendulum.raw_accelerometer.y:.4f}"
             self.pendulum.pod_angle()
             self.pendulum.accelerometer_angle()
-            self.angle_pod.text = "angle raw_pod: " + f"{self.pendulum.angle_pod:.4f}"
+            self.angle_pod.text = "angle pod: " + f"{self.pendulum.angle_pod:.4f}"
             self.angle_acc.text = "angle acc: " + f"{self.pendulum.angle_accelerometer:.4f}"
             self.force_acc.text = "force acc: " + f"{self.pendulum.normalized_accelerometer.length():.4f}"
         else:
-            self.volt_pod.text = "raw_pod: disconnected"
-            self.volt_x.text = "x: disconnected"
-            self.volt_y.text = "y: disconnected"
-            self.angle_pod.text = "angle raw_pod: disconnected"
+            self.volt_pod.text = "volt pod: disconnected"
+            self.volt_x.text = "volt x: disconnected"
+            self.volt_y.text = "volt y: disconnected"
+            self.angle_pod.text = "angle pod: disconnected"
             self.angle_acc.text = "angle acc: disconnected"
             self.force_acc.text = "force acc: disconnected"
 
